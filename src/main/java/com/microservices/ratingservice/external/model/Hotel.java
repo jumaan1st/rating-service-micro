@@ -1,4 +1,4 @@
-package com.microservices.ratingservice.entity;
+package com.microservices.ratingservice.external.model;
 
 import lombok.Getter;
 import lombok.Setter;

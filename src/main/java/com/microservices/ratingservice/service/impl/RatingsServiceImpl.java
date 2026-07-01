@@ -1,17 +1,21 @@
 package com.microservices.ratingservice.service.impl;
 
-import com.microservices.ratingservice.entity.Hotel;
 import com.microservices.ratingservice.entity.Ratings;
-import com.microservices.ratingservice.external.service.HotelService;
+import com.microservices.ratingservice.external.model.Hotel;
+import com.microservices.ratingservice.external.service.HotelClient;
 import com.microservices.ratingservice.repository.RatingsRepository;
 import com.microservices.ratingservice.service.RatingsService;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -19,8 +23,7 @@ import java.util.List;
 public class RatingsServiceImpl implements RatingsService {
 
     private final RatingsRepository ratingsRepository;
-    private final RestTemplate restTemplate;
-    private final HotelService hotelService;
+    private final HotelClient hotelClient;
 
     @Override
     public Ratings findById(String ratingId) {
@@ -39,28 +42,61 @@ public class RatingsServiceImpl implements RatingsService {
     }
 
     @Override
+    @CircuitBreaker(
+            name = "hotel-service",
+            fallbackMethod = "hotelFallback"
+    )
+    @Retry(name = "hotel-service", fallbackMethod = "hotelFallback")
     public List<Ratings> findByUserId(String userId) {
+
         List<Ratings> ratings = ratingsRepository.findByUserId(userId);
 
-        Hotel hotel = null;
-        for (Ratings rating : ratings) {
+        if (ratings == null || ratings.isEmpty()) {
+            return Collections.emptyList();
+        }
 
-            try {
-                ResponseEntity<Hotel> hotelEntity = hotelService.findById(rating.getHotelId());
-                if (hotelEntity.getStatusCode().is2xxSuccessful()) {
-                    hotel = hotelEntity.getBody();
-                } else {
-                    log.error("hotel status code is {}", hotelEntity.getStatusCode());
+        // Extract distinct hotel IDs to make a bulk call
+        List<String> hotelIds = ratings.stream()
+                .map(Ratings::getHotelId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        // Fetch hotels in a single bulk call
+        List<Hotel> hotels = List.of();
+        if (!hotelIds.isEmpty()) {
+            hotels = hotelClient.findByIds(hotelIds);
+        }
+
+        // Map hotel ID to Hotel object for quick lookup
+        Map<String, Hotel> hotelMap = hotels.stream()
+                .collect(Collectors.toMap(Hotel::getId, h -> h, (h1, h2) -> h1));
+
+        // Assign hotels to their respective ratings
+        for (Ratings rating : ratings) {
+            if (rating.getHotelId() != null) {
+                Hotel hotelEntity = hotelMap.get(rating.getHotelId());
+                if (hotelEntity != null) {
+                    log.info("Hotel id is {}", rating.getHotelId());
+                    log.info("Hotel name is {}", hotelEntity.getName());
+                    rating.setHotel(hotelEntity);
                 }
-            }catch (Exception e) {
-                log.error("hotel status code is {}", e.getMessage());
             }
-            log.info("hotel id is {}", rating.getHotelId());
-            log.info("hotel name is {}", hotel);
-        rating.setHotel(hotel);
         }
 
         return ratings;
+    }
+
+    public List<Ratings> hotelFallback(
+            String userId,
+            Throwable throwable) {
+
+        log.error(
+                "Hotel service is down: {}",
+                throwable.getMessage()
+        );
+
+        return Collections.emptyList();
     }
 
     @Override

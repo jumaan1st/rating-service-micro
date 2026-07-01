@@ -1,19 +1,53 @@
 spring:
   application:
-    name: rating-service
+    name: ratingservice
+  config:
+    import: optional:configserver:${CONFIG_SERVER_URL}
+
   mongodb:
     uri: mongodb://localhost:27017/
     database: microservices
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/
+      database: microservices
 
-eureka:
-  client:
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
-    register-with-eureka: true
-    fetch-registry: true
 
-  instance:
-    prefer-ip-address: true
+management:
+  health:
+    circuitbreakers:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      hotel-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 3
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+  retry:
+    instances:
+      hotel-service:
+        maxAttempts: 3
+        waitDuration: 2s
+  ratelimiter:
+    instances:
+      hotel-service:
+        limit-for-period: 5
+        limit-refresh-period: 10s
+        timeout-duration: 2s
+
+
 
 server:
   port: 8081
